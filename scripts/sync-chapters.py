@@ -22,8 +22,8 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 HTML_LIMIT = 2 * 1024 * 1024
 PNG_LIMIT = 256 * 1024
 TOTAL_LIMIT = 32 * 1024 * 1024
-REQUEST_GAP = 0.5
-RETRY_DELAY = 1
+REQUEST_GAP = 1.5
+RETRY_DELAYS = (3, 6)
 FETCH_HELPER = Path(__file__).with_name("fetch-upstream.mjs")
 VOID_TAGS = frozenset(
     "area base br col embed hr img input link meta param source track wbr".split()
@@ -229,7 +229,7 @@ class Upstream:
             time.sleep(REQUEST_GAP)
         self.started = True
 
-        for attempt in range(2):
+        for attempt in range(len(RETRY_DELAYS) + 1):
             try:
                 response = subprocess.run(
                     ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit)],
@@ -244,7 +244,7 @@ class Upstream:
                     break
                 message = response.stderr.decode("ascii", errors="ignore").strip()
 
-            if message != "request timed out" or attempt == 1:
+            if message != "request timed out" or attempt == len(RETRY_DELAYS):
                 if not re.fullmatch(
                     r"HTTP \d{3}(?: \(retry after \d+ seconds\))?|"
                     r"(?:unexpected content type|oversized response|empty response|request failed|request timed out)",
@@ -252,8 +252,9 @@ class Upstream:
                 ):
                     message = "request failed"
                 raise SyncError(f"{label}: {message}")
-            print(f"{label}: request timed out, retrying once", flush=True)
-            time.sleep(RETRY_DELAY)
+            delay = RETRY_DELAYS[attempt]
+            print(f"{label}: request timed out, retrying in {delay} seconds", flush=True)
+            time.sleep(delay)
 
         body = response.stdout
         self.bytes_read += len(body)
@@ -293,6 +294,7 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
         chapters.append({"title": title, "paragraphs": paragraphs})
         print(f"{label}: {len(paragraphs)} paragraphs", flush=True)
 
+    print(f"images: {len(image_urls)} unique PNGs", flush=True)
     images = []
     for url, index in image_urls.items():
         label = f"image {index + 1}"
