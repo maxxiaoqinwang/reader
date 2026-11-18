@@ -1,6 +1,7 @@
 import argparse
 import base64
 import json
+import os
 import re
 import subprocess
 import sys
@@ -24,7 +25,9 @@ PNG_LIMIT = 256 * 1024
 TOTAL_LIMIT = 32 * 1024 * 1024
 REQUEST_GAP = 1.5
 RETRY_DELAYS = (3, 6)
+TRANSIENT_ERRORS = frozenset(("request timed out", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"))
 FETCH_HELPER = Path(__file__).with_name("fetch-upstream.mjs")
+CHECKPOINT_HELPER = Path(__file__).with_name("sync-checkpoint.mjs")
 VOID_TAGS = frozenset(
     "area base br col embed hr img input link meta param source track wbr".split()
 )
@@ -35,7 +38,11 @@ class SyncError(Exception):
     pass
 
 
-class SyncTimeout(SyncError):
+class SyncUnavailable(SyncError):
+    pass
+
+
+class SyncTimeout(SyncUnavailable):
     pass
 
 
@@ -227,6 +234,14 @@ class Upstream:
     def __init__(self):
         self.started = False
         self.bytes_read = 0
+        self.environment = os.environ.copy()
+        self.environment.pop("READER_PASSWORD", None)
+
+    def measure(self, body, limit, label):
+        self.bytes_read += len(body)
+        if not body or len(body) > limit or self.bytes_read > TOTAL_LIMIT:
+            raise SyncError(f"{label}: empty or oversized response")
+        return body
 
     def fetch(self, url, media_type, limit, label):
         if self.started:
@@ -239,7 +254,7 @@ class Upstream:
                 response = subprocess.run(
                     ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit),
                      str(timeout_seconds * 1000)],
-                    capture_output=True, timeout=timeout_seconds + 5, check=False,
+                    capture_output=True, timeout=timeout_seconds + 5, check=False, env=self.environment,
                 )
             except subprocess.TimeoutExpired:
                 message = "request timed out"
@@ -250,37 +265,106 @@ class Upstream:
                     break
                 message = response.stderr.decode("ascii", errors="ignore").strip()
 
-            if message != "request timed out" or attempt == len(RETRY_DELAYS):
+            if message not in TRANSIENT_ERRORS or attempt == len(RETRY_DELAYS):
                 if not re.fullmatch(
-                    r"HTTP \d{3}(?: \(retry after \d+ seconds\))?|"
-                    r"(?:unexpected content type|oversized response|empty response|request failed|request timed out)",
+                    r"HTTP \d{3}(?: \(retry (?:after \d+ seconds|later)\))?|"
+                    r"(?:unexpected content type|oversized response|empty response|request failed|request timed out|upstream challenge)",
                     message,
                 ):
                     message = "request failed"
-                failure = SyncTimeout if message == "request timed out" else SyncError
+                failure = SyncError
+                if message == "request timed out":
+                    failure = SyncTimeout
+                elif message in TRANSIENT_ERRORS:
+                    failure = SyncUnavailable
                 raise failure(f"{label}: {message}")
             delay = RETRY_DELAYS[attempt]
-            print(f"{label}: request timed out, retrying in {delay} seconds", flush=True)
+            print(f"{label}: {message}, retrying in {delay} seconds", flush=True)
             time.sleep(delay)
 
-        body = response.stdout
-        self.bytes_read += len(body)
-        if not body or len(body) > limit or self.bytes_read > TOTAL_LIMIT:
-            raise SyncError(f"{label}: empty or oversized response")
-        return body
+        return self.measure(response.stdout, limit, label)
 
 
-def sync_chapters(upstream, book_url=CATALOG_URL):
-    book_id, catalog_url = normalize_book_url(book_url)
-    chapter_root = f"{ORIGIN}/read/{book_id}/"
-    catalog = upstream.fetch(catalog_url, "text/html", HTML_LIMIT, "catalog")
-    contents = read_catalog(catalog.decode("utf-8-sig"), book_id)
+class Checkpoint:
+    def __init__(self, directory, book_id):
+        self.directory = directory
+        self.book_id = book_id
+
+    def run(self, action, url, media_type, limit, body=None):
+        try:
+            response = subprocess.run(
+                ["node", str(CHECKPOINT_HELPER), action, str(self.directory), self.book_id, url, media_type, str(limit)],
+                input=body, capture_output=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return response.stdout if response.returncode == 0 else None
+
+    def read(self, url, media_type, limit):
+        return self.run("read", url, media_type, limit)
+
+    def write(self, url, media_type, limit, body):
+        self.run("write", url, media_type, limit, body)
+
+
+def read_resource(upstream, checkpoint, url, media_type, limit, label, parse, *, fresh=False):
+    def restore():
+        if not checkpoint:
+            return None
+        cached = checkpoint.read(url, media_type, limit)
+        if not cached or len(cached) > limit:
+            return None
+        try:
+            parsed = parse(cached)
+        except (ValueError, SyncError):
+            return None
+        upstream.measure(cached, limit, label)
+        print(f"{label}: restored from sync checkpoint", flush=True)
+        return parsed
+
+    if not fresh:
+        restored = restore()
+        if restored is not None:
+            return restored
+    try:
+        body = upstream.fetch(url, media_type, limit, label)
+    except SyncUnavailable:
+        if not fresh:
+            raise
+        restored = restore()
+        if restored is None:
+            raise
+        return restored
+    parsed = parse(body)
+    if checkpoint:
+        checkpoint.write(url, media_type, limit, body)
+    return parsed
+
+
+def parse_catalog_response(body, book_id):
+    contents = read_catalog(body.decode("utf-8-sig"), book_id)
     catalog_ids = sorted(contents.chapter_ids)
     if not catalog_ids:
         raise SyncError("catalog: no chapter links")
     book_title = contents.book_title()
     if not book_title:
         raise SyncError("catalog: missing book title")
+    return book_title, catalog_ids
+
+
+def parse_png(body):
+    if not body.startswith(PNG_SIGNATURE):
+        raise ValueError("Invalid PNG signature")
+    return body
+
+
+def sync_chapters(upstream, book_url=CATALOG_URL, checkpoint=None):
+    book_id, catalog_url = normalize_book_url(book_url)
+    chapter_root = f"{ORIGIN}/read/{book_id}/"
+    book_title, catalog_ids = read_resource(
+        upstream, checkpoint, catalog_url, "text/html", HTML_LIMIT, "catalog",
+        lambda body: parse_catalog_response(body, book_id), fresh=True,
+    )
     print(f"catalog: {len(catalog_ids)} chapters", flush=True)
 
     chapter_ids = []
@@ -290,13 +374,14 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
     for chapter_id in catalog_ids:
         label = f"chapter {chapter_id}"
         try:
-            html = upstream.fetch(f"{chapter_root}{chapter_id}.html", "text/html", HTML_LIMIT, label)
-        except SyncTimeout:
+            title, paragraphs = read_resource(
+                upstream, checkpoint, f"{chapter_root}{chapter_id}.html", "text/html", HTML_LIMIT, label,
+                lambda body: parse_chapter(body.decode("utf-8-sig"), chapter_root),
+            )
+        except SyncUnavailable as error:
             missing_chapter_ids.append(chapter_id)
-            print(f"{label}: download timed out, continuing with available chapters", flush=True)
+            print(f"{error}, continuing with available chapters", flush=True)
             continue
-        try:
-            title, paragraphs = parse_chapter(html.decode("utf-8-sig"), chapter_root)
         except ValueError:
             raise SyncError(f"{label}: unexpected chapter content") from None
 
@@ -318,14 +403,14 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
     for index, url in enumerate(image_urls, start=1):
         label = f"image {index}"
         try:
-            png = upstream.fetch(url, "image/png", PNG_LIMIT, label)
-        except SyncTimeout:
+            png = read_resource(upstream, checkpoint, url, "image/png", PNG_LIMIT, label, parse_png)
+        except SyncUnavailable as error:
             image_urls[url] = "□"
             missing_glyphs += 1
-            print(f"{label}: download timed out, using placeholder", flush=True)
+            print(f"{error}, using placeholder", flush=True)
             continue
-        if not png.startswith(PNG_SIGNATURE):
-            raise SyncError(f"{label}: invalid PNG signature")
+        except ValueError:
+            raise SyncError(f"{label}: invalid PNG signature") from None
         image_urls[url] = {"image": len(images)}
         images.append(base64.b64encode(png).decode("ascii"))
 
@@ -362,11 +447,16 @@ def main():
     parser = argparse.ArgumentParser(description="Sync the linked reader chapter package.")
     parser.add_argument("output_json", type=Path)
     parser.add_argument("--book-url", default=CATALOG_URL, help="Public lizhiks.com book URL")
+    parser.add_argument("--checkpoint-dir", type=Path, help="Directory for encrypted sync progress")
     args = parser.parse_args()
     try:
         if not args.output_json.parent.is_dir() or args.output_json.is_dir():
             raise SyncError("invalid output path")
-        package = sync_chapters(Upstream(), args.book_url)
+        checkpoint = None
+        if args.checkpoint_dir and os.environ.get("READER_PASSWORD"):
+            book_id, _ = normalize_book_url(args.book_url)
+            checkpoint = Checkpoint(args.checkpoint_dir, book_id)
+        package = sync_chapters(Upstream(), args.book_url, checkpoint)
         write_package(args.output_json, package)
     except SyncError as error:
         print(error, file=sys.stderr)

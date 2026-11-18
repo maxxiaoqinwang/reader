@@ -12,12 +12,19 @@ async function main(signal) {
     signal,
   });
 
-  if (response.status !== 200 || response.headers.get('cf-mitigated') === 'challenge') {
+  if (response.headers.get('cf-mitigated') === 'challenge') {
+    response.body?.cancel().catch(() => {});
+    throw new RequestError('upstream challenge');
+  }
+  if (response.status !== 200) {
     response.body?.cancel().catch(() => {});
     const retry = response.headers.get('retry-after');
-    const suffix = response.status === 429 && /^\d{1,6}$/.test(retry ?? '')
-      ? ' (retry after ' + retry + ' seconds)'
-      : '';
+    let suffix = '';
+    if ([429, 503].includes(response.status) && /^\d{1,6}$/.test(retry ?? '')) {
+      suffix = ' (retry after ' + retry + ' seconds)';
+    } else if (response.status === 503 && retry !== null) {
+      suffix = ' (retry later)';
+    }
     throw new RequestError('HTTP ' + response.status + suffix);
   }
   if (response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== mediaType) {

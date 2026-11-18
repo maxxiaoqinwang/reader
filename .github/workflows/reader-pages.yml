@@ -33,16 +33,44 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Prepare sync checkpoint
+        if: inputs.book_url != ''
+        id: checkpoint
+        env:
+          READER_BOOK_URL: ${{ inputs.book_url }}
+        run: |
+          mkdir -m 700 -p "$RUNNER_TEMP/reader-sync-checkpoint"
+          book_key="${READER_BOOK_URL#https://}"
+          book_key="${book_key#www.}"
+          key_hash="$(printf '%s' "$book_key" | sha256sum | cut -d ' ' -f 1)"
+          printf 'prefix=reader-sync-v1-%s-\n' "$key_hash" >> "$GITHUB_OUTPUT"
+      - name: Restore encrypted sync checkpoint
+        if: inputs.book_url != ''
+        uses: actions/cache/restore@v6
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/reader-sync-checkpoint/*.enc
+          key: ${{ steps.checkpoint.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.checkpoint.outputs.prefix }}
       - name: Sync chapters
         if: inputs.book_url != ''
         id: sync
         env:
           READER_BOOK_URL: ${{ inputs.book_url }}
+          READER_PASSWORD: ${{ secrets.READER_PASSWORD }}
         run: |
           source_dir="$(mktemp -d "$RUNNER_TEMP/reader-source.XXXXXX")"
           source_file="$source_dir/book.json"
-          python3 scripts/sync-chapters.py "$source_file" --book-url "$READER_BOOK_URL"
+          python3 scripts/sync-chapters.py "$source_file" --book-url "$READER_BOOK_URL" \
+            --checkpoint-dir "$RUNNER_TEMP/reader-sync-checkpoint"
           printf 'source_file=%s\n' "$source_file" >> "$GITHUB_OUTPUT"
+      - name: Save encrypted sync checkpoint
+        if: ${{ !cancelled() && (steps.sync.outcome == 'success' || steps.sync.outcome == 'failure') }}
+        uses: actions/cache/save@v6
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/reader-sync-checkpoint/*.enc
+          key: ${{ steps.checkpoint.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
       - name: Build and verify encrypted library
         env:
           READER_PASSWORD: ${{ secrets.READER_PASSWORD }}
