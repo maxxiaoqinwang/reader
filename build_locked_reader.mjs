@@ -1,6 +1,6 @@
 import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { deriveReaderKey } from './locked-reader/crypto.js';
+import { encryptBook } from './scripts/book-package.mjs';
 
 const assets = ['index.html', 'reader.js', 'crypto.js'];
 const bookFile = 'book.json';
@@ -40,21 +40,6 @@ async function readBook(input) {
   } catch {
     throw new Error('无法读取章节内容包。');
   }
-}
-
-async function encryptBook(book, password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveReaderKey(password, salt, 'encrypt');
-  const plaintext = new TextEncoder().encode(book);
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-
-  return JSON.stringify({
-    version: 1,
-    salt: Buffer.from(salt).toString('base64'),
-    iv: Buffer.from(iv).toString('base64'),
-    ciphertext: Buffer.from(ciphertext).toString('base64'),
-  });
 }
 
 async function writeSite(output, encryptedBook) {

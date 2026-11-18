@@ -1,8 +1,12 @@
-name: Sync and deploy password reader
+name: Publish encrypted reader library
 
 on:
   workflow_dispatch:
     inputs:
+      book_url:
+        description: HTTPS book catalog URL to import
+        type: string
+        required: false
       deploy:
         description: Publish the verified reader to GitHub Pages
         type: boolean
@@ -13,44 +17,52 @@ permissions:
 
 concurrency:
   group: reader-pages
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          ref: main
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
       - name: Sync chapters
+        if: inputs.book_url != ''
+        id: sync
+        env:
+          READER_BOOK_URL: ${{ inputs.book_url }}
         run: |
           source_dir="$(mktemp -d "$RUNNER_TEMP/reader-source.XXXXXX")"
           source_file="$source_dir/book.json"
-          printf 'READER_SOURCE_FILE=%s\n' "$source_file" >> "$GITHUB_ENV"
-          python3 scripts/sync-chapters.py "$source_file"
-      - name: Build and verify encrypted reader
+          python3 scripts/sync-chapters.py "$source_file" --book-url "$READER_BOOK_URL"
+          printf 'source_file=%s\n' "$source_file" >> "$GITHUB_OUTPUT"
+      - name: Build and verify encrypted library
         env:
           READER_PASSWORD: ${{ secrets.READER_PASSWORD }}
+          READER_SOURCE_FILE: ${{ steps.sync.outputs.source_file }}
         run: |
-          node build_locked_reader.mjs "$READER_SOURCE_FILE" _site
-          node scripts/verify-encrypted-release.mjs "$READER_SOURCE_FILE" _site
-          mkdir _site/locked
-          cat > _site/locked/index.html <<'HTML'
-          <!doctype html>
-          <html lang="zh-CN">
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <meta http-equiv="refresh" content="0; url=../">
-          <title>我的在线阅读器</title>
-          <a href="../">进入阅读器</a>
-          </html>
-          HTML
-          sha256sum _site/book.json
+          arguments=(library _site)
+          if [[ -n "$READER_SOURCE_FILE" ]]; then
+            arguments+=("$READER_SOURCE_FILE")
+          fi
+          node scripts/manage-library.mjs "${arguments[@]}"
+      - name: Save encrypted library
+        if: inputs.deploy
+        run: |
+          git add -A -- library/
+          if ! git diff --cached --quiet -- library/; then
+            git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit --only -m 'Save encrypted reader library' -- library/
+          fi
+          git push origin HEAD:refs/heads/main
       - uses: actions/upload-pages-artifact@v4
         if: inputs.deploy
         with:

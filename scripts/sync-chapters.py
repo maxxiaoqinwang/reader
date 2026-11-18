@@ -12,9 +12,11 @@ from urllib.parse import urljoin, urlsplit
 
 ORIGIN = "https://www.lizhiks.com"
 HOST = "www.lizhiks.com"
-CATALOG_URL = f"{ORIGIN}/book/229314.html"
-CHAPTER_ROOT = f"{ORIGIN}/read/229314/"
-CHAPTER_PATH = re.compile(r"/read/229314/([1-9][0-9]*)\.html")
+DEFAULT_BOOK_ID = "229314"
+CATALOG_URL = f"{ORIGIN}/book/{DEFAULT_BOOK_ID}.html"
+CHAPTER_ROOT = f"{ORIGIN}/read/{DEFAULT_BOOK_ID}/"
+BOOK_URL = re.compile(r"https://(?:www\.)?lizhiks\.com/book/([1-9][0-9]*)\.html")
+CHAPTER_PATH = re.compile(r"/read/([1-9][0-9]*)/([1-9][0-9]*)\.html")
 PNG_PATH = re.compile(r"/asset/fonts/[0-9]+\.png")
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 HTML_LIMIT = 2 * 1024 * 1024
@@ -32,6 +34,14 @@ class SyncError(Exception):
     pass
 
 
+def normalize_book_url(value):
+    match = BOOK_URL.fullmatch(value)
+    if not match:
+        raise SyncError("book URL: expected an HTTPS lizhiks.com book page")
+    book_id = match[1]
+    return book_id, f"{ORIGIN}/book/{book_id}.html"
+
+
 def source_url(value, base):
     try:
         url = urlsplit(urljoin(base, value))
@@ -43,29 +53,75 @@ def source_url(value, base):
 
 
 class CatalogParser(HTMLParser):
-    def __init__(self):
+    def __init__(self, book_id):
         super().__init__()
+        self.book_id = book_id
+        self.url = f"{ORIGIN}/book/{book_id}.html"
         self.chapter_ids = set()
+        self.title_metadata = {}
+        self.heading_parts = []
+        self.found_heading = False
+        self.in_heading = False
+        self.ignored_tag = None
 
     def handle_starttag(self, tag, attrs):
-        if tag != "a":
+        if self.ignored_tag:
             return
-        url = source_url(dict(attrs).get("href") or "", CATALOG_URL)
-        match = CHAPTER_PATH.fullmatch(url.path) if url else None
-        if match:
-            self.chapter_ids.add(int(match[1]))
+        if tag in ("script", "style"):
+            self.ignored_tag = tag
+            return
+        if tag == "h1" and not self.found_heading:
+            self.found_heading = self.in_heading = True
+        elif tag == "meta":
+            attributes = dict(attrs)
+            name = (attributes.get("property") or attributes.get("name") or "").lower()
+            if name in ("og:novel:book_name", "og:novel:title", "og:title"):
+                title = HTML_SPACE.sub(" ", attributes.get("content") or "").strip()
+                if title:
+                    self.title_metadata.setdefault(name, title)
+        elif tag == "a":
+            url = source_url(dict(attrs).get("href") or "", self.url)
+            match = CHAPTER_PATH.fullmatch(url.path) if url else None
+            if match and match[1] == self.book_id:
+                self.chapter_ids.add(int(match[2]))
+
+    def handle_endtag(self, tag):
+        if self.ignored_tag:
+            if tag == self.ignored_tag:
+                self.ignored_tag = None
+            return
+        if tag == "h1":
+            self.in_heading = False
+
+    def handle_data(self, text):
+        if self.in_heading and not self.ignored_tag:
+            self.heading_parts.append(text)
+
+    def book_title(self):
+        heading = HTML_SPACE.sub(" ", "".join(self.heading_parts)).strip()
+        return (
+            self.title_metadata.get("og:novel:book_name")
+            or self.title_metadata.get("og:novel:title")
+            or heading
+            or self.title_metadata.get("og:title")
+        )
 
 
-def parse_catalog(html):
-    parser = CatalogParser()
+def read_catalog(html, book_id):
+    parser = CatalogParser(str(book_id))
     parser.feed(html)
     parser.close()
-    return sorted(parser.chapter_ids)
+    return parser
+
+
+def parse_catalog(html, book_id=DEFAULT_BOOK_ID):
+    return sorted(read_catalog(html, book_id).chapter_ids)
 
 
 class ChapterParser(HTMLParser):
-    def __init__(self):
+    def __init__(self, chapter_root):
         super().__init__()
+        self.chapter_root = chapter_root
         self.title_parts = []
         self.paragraphs = []
         self.paragraph = None
@@ -99,7 +155,7 @@ class ChapterParser(HTMLParser):
             if tag == "br":
                 self.append_text("\n")
             elif tag == "img":
-                url = source_url(attributes.get("src") or "", CHAPTER_ROOT)
+                url = source_url(attributes.get("src") or "", self.chapter_root)
                 if not url or not PNG_PATH.fullmatch(url.path) or url.query:
                     raise ValueError("Invalid chapter image")
                 self.paragraph.append({"image": f"{ORIGIN}{url.path}"})
@@ -152,8 +208,8 @@ class ChapterParser(HTMLParser):
         self.paragraph = None
 
 
-def parse_chapter(html):
-    parser = ChapterParser()
+def parse_chapter(html, chapter_root=CHAPTER_ROOT):
+    parser = ChapterParser(chapter_root)
     parser.feed(html)
     parser.close()
     title = HTML_SPACE.sub(" ", "".join(parser.title_parts)).strip()
@@ -197,20 +253,26 @@ class Upstream:
         return body
 
 
-def sync_chapters(upstream):
-    catalog = upstream.fetch(CATALOG_URL, "text/html", HTML_LIMIT, "catalog")
-    chapter_ids = parse_catalog(catalog.decode("utf-8-sig"))
+def sync_chapters(upstream, book_url=CATALOG_URL):
+    book_id, catalog_url = normalize_book_url(book_url)
+    chapter_root = f"{ORIGIN}/read/{book_id}/"
+    catalog = upstream.fetch(catalog_url, "text/html", HTML_LIMIT, "catalog")
+    contents = read_catalog(catalog.decode("utf-8-sig"), book_id)
+    chapter_ids = sorted(contents.chapter_ids)
     if not chapter_ids:
         raise SyncError("catalog: no chapter links")
+    book_title = contents.book_title()
+    if not book_title:
+        raise SyncError("catalog: missing book title")
     print(f"catalog: {len(chapter_ids)} chapters", flush=True)
 
     chapters = []
     image_urls = {}
     for chapter_id in chapter_ids:
         label = f"chapter {chapter_id}"
-        html = upstream.fetch(f"{CHAPTER_ROOT}{chapter_id}.html", "text/html", HTML_LIMIT, label)
+        html = upstream.fetch(f"{chapter_root}{chapter_id}.html", "text/html", HTML_LIMIT, label)
         try:
-            title, paragraphs = parse_chapter(html.decode("utf-8-sig"))
+            title, paragraphs = parse_chapter(html.decode("utf-8-sig"), chapter_root)
         except ValueError:
             raise SyncError(f"{label}: unexpected chapter content") from None
 
@@ -230,7 +292,13 @@ def sync_chapters(upstream):
             raise SyncError(f"{label}: invalid PNG signature")
         images.append(base64.b64encode(png).decode("ascii"))
 
-    return {"chapters": chapters, "images": images}
+    return {
+        "id": book_id,
+        "title": book_title,
+        "chapterIds": chapter_ids,
+        "chapters": chapters,
+        "images": images,
+    }
 
 
 def write_package(path, package):
@@ -248,11 +316,12 @@ def write_package(path, package):
 def main():
     parser = argparse.ArgumentParser(description="Sync the linked reader chapter package.")
     parser.add_argument("output_json", type=Path)
+    parser.add_argument("--book-url", default=CATALOG_URL, help="Public lizhiks.com book URL")
     args = parser.parse_args()
     try:
         if not args.output_json.parent.is_dir() or args.output_json.is_dir():
             raise SyncError("invalid output path")
-        package = sync_chapters(Upstream())
+        package = sync_chapters(Upstream(), args.book_url)
         write_package(args.output_json, package)
     except SyncError as error:
         print(error, file=sys.stderr)
