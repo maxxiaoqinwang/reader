@@ -35,6 +35,10 @@ class SyncError(Exception):
     pass
 
 
+class SyncTimeout(SyncError):
+    pass
+
+
 def normalize_book_url(value):
     match = BOOK_URL.fullmatch(value)
     if not match:
@@ -251,7 +255,8 @@ class Upstream:
                     message,
                 ):
                     message = "request failed"
-                raise SyncError(f"{label}: {message}")
+                failure = SyncTimeout if message == "request timed out" else SyncError
+                raise failure(f"{label}: {message}")
             delay = RETRY_DELAYS[attempt]
             print(f"{label}: request timed out, retrying in {delay} seconds", flush=True)
             time.sleep(delay)
@@ -289,19 +294,33 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
         for paragraph in paragraphs:
             for part in paragraph:
                 if isinstance(part, dict):
-                    part["image"] = image_urls.setdefault(part["image"], len(image_urls))
+                    image_urls.setdefault(part["image"], None)
 
         chapters.append({"title": title, "paragraphs": paragraphs})
         print(f"{label}: {len(paragraphs)} paragraphs", flush=True)
 
     print(f"images: {len(image_urls)} unique PNGs", flush=True)
     images = []
-    for url, index in image_urls.items():
-        label = f"image {index + 1}"
-        png = upstream.fetch(url, "image/png", PNG_LIMIT, label)
+    missing_glyphs = 0
+    for index, url in enumerate(image_urls, start=1):
+        label = f"image {index}"
+        try:
+            png = upstream.fetch(url, "image/png", PNG_LIMIT, label)
+        except SyncTimeout:
+            image_urls[url] = "□"
+            missing_glyphs += 1
+            print(f"{label}: download timed out, using placeholder", flush=True)
+            continue
         if not png.startswith(PNG_SIGNATURE):
             raise SyncError(f"{label}: invalid PNG signature")
+        image_urls[url] = {"image": len(images)}
         images.append(base64.b64encode(png).decode("ascii"))
+
+    for chapter in chapters:
+        chapter["paragraphs"] = [
+            [image_urls[part["image"]] if isinstance(part, dict) else part for part in paragraph]
+            for paragraph in chapter["paragraphs"]
+        ]
 
     return {
         "id": book_id,
@@ -309,6 +328,7 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
         "chapterIds": chapter_ids,
         "chapters": chapters,
         "images": images,
+        "missingGlyphs": missing_glyphs,
     }
 
 
@@ -341,7 +361,8 @@ def main():
         print("sync: invalid input, response, or output", file=sys.stderr)
         return 1
 
-    print(f"sync: {len(package['chapters'])} chapters, {len(package['images'])} unique PNGs")
+    print(f"sync: {len(package['chapters'])} chapters, {len(package['images'])} unique PNGs, "
+          f"{package['missingGlyphs']} missing glyphs")
     return 0
 
 

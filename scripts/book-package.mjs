@@ -28,7 +28,10 @@ export async function decryptBook(serialized, password) {
 }
 
 export function requireBookData(book) {
-  const { chapters, images } = book;
+  const { chapters, images, missingGlyphs = 0 } = book;
+  if (!Number.isSafeInteger(missingGlyphs) || missingGlyphs < 0) {
+    throw new Error('Invalid missing glyph count');
+  }
   const pngSignature = Buffer.from('89504e470d0a1a0a', 'hex');
   if (!Array.isArray(images) || !images.every(
     image => typeof image === 'string' &&

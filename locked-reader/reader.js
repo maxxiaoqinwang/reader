@@ -108,7 +108,11 @@ function parseBook(value) {
     ? value.map((chapter) => ({ title: chapter?.title, paragraphs: [[chapter?.body]] }))
     : value?.chapters;
   const images = Array.isArray(value) ? [] : value?.images;
-  if (!Array.isArray(chapters) || chapters.length === 0 || !Array.isArray(images)) {
+  const missingGlyphs = value?.missingGlyphs === undefined ? 0 : value.missingGlyphs;
+  if (
+    !Array.isArray(chapters) || chapters.length === 0 || !Array.isArray(images) ||
+    !Number.isSafeInteger(missingGlyphs) || missingGlyphs < 0
+  ) {
     throw new Error('Invalid book format');
   }
 
@@ -133,7 +137,7 @@ function parseBook(value) {
     }
     return new Blob([bytes], { type: 'image/png' });
   });
-  return { chapters, images: pngs };
+  return { chapters, images: pngs, missingGlyphs };
 }
 
 async function decryptResponse(response, password) {
@@ -244,6 +248,9 @@ function showBook(value) {
   chapterSelect.replaceChildren(...book.chapters.map(({ title }) => new Option(title)));
   chapterControls.hidden = false;
   showChapter();
+  readerStatus.textContent = book.missingGlyphs
+    ? `${book.missingGlyphs} 张字图暂缺，正文已用「□」标出。`
+    : '';
 }
 
 function showLibrary({ books, legacy }) {
@@ -299,7 +306,6 @@ async function loadSelectedBook() {
     const selected = parseBook(await decryptResponse(response, password));
     if (loadRequest === request) {
       showBook(selected);
-      readerStatus.textContent = '';
     }
   } catch {
     if (loadRequest === request) {

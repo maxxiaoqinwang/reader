@@ -47,7 +47,7 @@ async function readLibrary(folder, password) {
     const book = JSON.parse(serialized);
     requireBookData(book);
     if (entry.chapterIds.length !== book.chapters.length) throw new Error('Missing chapters');
-    volumes.set(entry.id, { encrypted, serialized });
+    volumes.set(entry.id, { encrypted, serialized, missingGlyphs: book.missingGlyphs ?? 0 });
   }
   if (!volumes.has(seed.id) || files.length !== volumes.size + Number(saved)) {
     throw new Error('Incomplete library state');
@@ -63,18 +63,24 @@ async function sealVerified(serialized, password) {
 
 async function addBook(library, sourcePath, password) {
   const source = JSON.parse(await readFile(sourcePath, 'utf-8'));
-  const { id, title, chapterIds, chapters, images } = source;
+  const { id, title, chapterIds, chapters, images, missingGlyphs = 0 } = source;
   const entry = { id, title, chapterIds };
   validateEntry(entry);
-  const book = { chapters, images };
+  const book = { chapters, images, missingGlyphs };
   requireBookData(book);
+  if (missingGlyphs === 0) delete book.missingGlyphs;
   if (chapters.length !== chapterIds.length) throw new Error('Incomplete source book');
 
   const index = library.manifest.books.findIndex(existing => existing.id === id);
+  const previous = library.volumes.get(id);
   if (index >= 0) {
     const nextIds = new Set(chapterIds);
     if (!library.manifest.books[index].chapterIds.every(chapter => nextIds.has(chapter))) {
       throw new LibraryError('The source listing is missing previously saved chapters.');
+    }
+    if (missingGlyphs > 0 && missingGlyphs >= previous.missingGlyphs) {
+      console.log('Kept the existing copy because the download did not reduce missing glyphs.');
+      return;
     }
     library.manifest.books[index] = entry;
   } else {
@@ -82,9 +88,9 @@ async function addBook(library, sourcePath, password) {
   }
 
   const serialized = JSON.stringify(book);
-  if (library.volumes.get(id)?.serialized !== serialized) {
+  if (previous?.serialized !== serialized) {
     const encrypted = await sealVerified(serialized, password);
-    library.volumes.set(id, { encrypted, serialized });
+    library.volumes.set(id, { encrypted, serialized, missingGlyphs });
   }
 }
 
