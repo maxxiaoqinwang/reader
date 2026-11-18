@@ -234,10 +234,12 @@ class Upstream:
         self.started = True
 
         for attempt in range(len(RETRY_DELAYS) + 1):
+            timeout_seconds = 20 if media_type == "text/html" and attempt == len(RETRY_DELAYS) else 10
             try:
                 response = subprocess.run(
-                    ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit)],
-                    capture_output=True, timeout=15, check=False,
+                    ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit),
+                     str(timeout_seconds * 1000)],
+                    capture_output=True, timeout=timeout_seconds + 5, check=False,
                 )
             except subprocess.TimeoutExpired:
                 message = "request timed out"
@@ -273,19 +275,26 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
     chapter_root = f"{ORIGIN}/read/{book_id}/"
     catalog = upstream.fetch(catalog_url, "text/html", HTML_LIMIT, "catalog")
     contents = read_catalog(catalog.decode("utf-8-sig"), book_id)
-    chapter_ids = sorted(contents.chapter_ids)
-    if not chapter_ids:
+    catalog_ids = sorted(contents.chapter_ids)
+    if not catalog_ids:
         raise SyncError("catalog: no chapter links")
     book_title = contents.book_title()
     if not book_title:
         raise SyncError("catalog: missing book title")
-    print(f"catalog: {len(chapter_ids)} chapters", flush=True)
+    print(f"catalog: {len(catalog_ids)} chapters", flush=True)
 
+    chapter_ids = []
+    missing_chapter_ids = []
     chapters = []
     image_urls = {}
-    for chapter_id in chapter_ids:
+    for chapter_id in catalog_ids:
         label = f"chapter {chapter_id}"
-        html = upstream.fetch(f"{chapter_root}{chapter_id}.html", "text/html", HTML_LIMIT, label)
+        try:
+            html = upstream.fetch(f"{chapter_root}{chapter_id}.html", "text/html", HTML_LIMIT, label)
+        except SyncTimeout:
+            missing_chapter_ids.append(chapter_id)
+            print(f"{label}: download timed out, continuing with available chapters", flush=True)
+            continue
         try:
             title, paragraphs = parse_chapter(html.decode("utf-8-sig"), chapter_root)
         except ValueError:
@@ -296,8 +305,12 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
                 if isinstance(part, dict):
                     image_urls.setdefault(part["image"], None)
 
+        chapter_ids.append(chapter_id)
         chapters.append({"title": title, "paragraphs": paragraphs})
         print(f"{label}: {len(paragraphs)} paragraphs", flush=True)
+
+    if not chapters:
+        raise SyncError("sync: no chapters downloaded")
 
     print(f"images: {len(image_urls)} unique PNGs", flush=True)
     images = []
@@ -326,6 +339,7 @@ def sync_chapters(upstream, book_url=CATALOG_URL):
         "id": book_id,
         "title": book_title,
         "chapterIds": chapter_ids,
+        "missingChapterIds": missing_chapter_ids,
         "chapters": chapters,
         "images": images,
         "missingGlyphs": missing_glyphs,
@@ -362,7 +376,7 @@ def main():
         return 1
 
     print(f"sync: {len(package['chapters'])} chapters, {len(package['images'])} unique PNGs, "
-          f"{package['missingGlyphs']} missing glyphs")
+          f"{package['missingGlyphs']} missing glyphs, {len(package['missingChapterIds'])} missing chapters")
     return 0
 
 

@@ -27,10 +27,18 @@ export async function decryptBook(serialized, password) {
   return new TextDecoder('utf-8', { fatal: true }).decode(plaintext);
 }
 
+export function validChapterIds(ids) {
+  return Array.isArray(ids) && ids.every((id, index) =>
+    Number.isSafeInteger(id) && id > 0 && (index === 0 || id > ids[index - 1]));
+}
+
 export function requireBookData(book) {
-  const { chapters, images, missingGlyphs = 0 } = book;
+  const { chapters, images, missingGlyphs = 0, missingChapterIds = [] } = book;
   if (!Number.isSafeInteger(missingGlyphs) || missingGlyphs < 0) {
     throw new Error('Invalid missing glyph count');
+  }
+  if (!validChapterIds(missingChapterIds)) {
+    throw new Error('Invalid missing chapter list');
   }
   const pngSignature = Buffer.from('89504e470d0a1a0a', 'hex');
   if (!Array.isArray(images) || !images.every(

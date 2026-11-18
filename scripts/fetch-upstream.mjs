@@ -36,7 +36,7 @@ async function main(signal) {
   process.stdout.write(Buffer.concat(chunks, length));
 }
 
-const signal = AbortSignal.timeout(10_000);
+const signal = AbortSignal.timeout(Number(process.argv[5] ?? 10_000));
 main(signal).catch(error => {
   if (error instanceof RequestError) {
     console.error(error.message);

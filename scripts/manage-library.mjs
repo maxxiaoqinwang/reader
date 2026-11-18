@@ -1,6 +1,6 @@
 import { copyFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { decryptBook, encryptBook, requireBookData } from './book-package.mjs';
+import { decryptBook, encryptBook, requireBookData, validChapterIds } from './book-package.mjs';
 
 const seed = {
   id: '229314',
@@ -17,12 +17,18 @@ function validateEntry(book) {
   if (
     typeof id !== 'string' || !/^[1-9]\d{0,15}$/.test(id) ||
     typeof title !== 'string' || !title.trim() ||
-    !Array.isArray(chapterIds) || chapterIds.length === 0 ||
-    !chapterIds.every((chapter, index) => Number.isSafeInteger(chapter) && chapter > 0 &&
-      (index === 0 || chapter > chapterIds[index - 1]))
+    !validChapterIds(chapterIds) || chapterIds.length === 0
   ) {
     throw new Error('Invalid library metadata');
   }
+}
+
+function validateChapterCoverage(chapterIds, book) {
+  const available = new Set(chapterIds);
+  if (chapterIds.length !== book.chapters.length || book.missingChapterIds?.some(id => available.has(id))) {
+    throw new LibraryError('Book chapter data does not match its chapter list.');
+  }
+  return available;
 }
 
 async function readLibrary(folder, password) {
@@ -46,7 +52,7 @@ async function readLibrary(folder, password) {
     const serialized = await decryptBook(encrypted, password);
     const book = JSON.parse(serialized);
     requireBookData(book);
-    if (entry.chapterIds.length !== book.chapters.length) throw new Error('Missing chapters');
+    validateChapterCoverage(entry.chapterIds, book);
     volumes.set(entry.id, { encrypted, serialized, missingGlyphs: book.missingGlyphs ?? 0 });
   }
   if (!volumes.has(seed.id) || files.length !== volumes.size + Number(saved)) {
@@ -63,23 +69,31 @@ async function sealVerified(serialized, password) {
 
 async function addBook(library, sourcePath, password) {
   const source = JSON.parse(await readFile(sourcePath, 'utf-8'));
-  const { id, title, chapterIds, chapters, images, missingGlyphs = 0 } = source;
+  const { id, title, chapterIds, chapters, images, missingGlyphs = 0, missingChapterIds = [] } = source;
   const entry = { id, title, chapterIds };
   validateEntry(entry);
-  const book = { chapters, images, missingGlyphs };
+  const book = { chapters, images, missingGlyphs, missingChapterIds };
   requireBookData(book);
+  const nextIds = validateChapterCoverage(chapterIds, book);
   if (missingGlyphs === 0) delete book.missingGlyphs;
-  if (chapters.length !== chapterIds.length) throw new Error('Incomplete source book');
+  if (missingChapterIds.length === 0) delete book.missingChapterIds;
 
   const index = library.manifest.books.findIndex(existing => existing.id === id);
   const previous = library.volumes.get(id);
   if (index >= 0) {
-    const nextIds = new Set(chapterIds);
-    if (!library.manifest.books[index].chapterIds.every(chapter => nextIds.has(chapter))) {
+    const previousIds = library.manifest.books[index].chapterIds;
+    const catalogIds = new Set([...chapterIds, ...missingChapterIds]);
+    if (!previousIds.every(chapter => catalogIds.has(chapter))) {
       throw new LibraryError('The source listing is missing previously saved chapters.');
     }
-    if (missingGlyphs > 0 && missingGlyphs >= previous.missingGlyphs) {
-      console.log('Kept the existing copy because the download did not reduce missing glyphs.');
+    if (!previousIds.every(chapter => nextIds.has(chapter))) {
+      console.log('Kept the existing copy because some previously saved chapters timed out.');
+      return;
+    }
+    if (missingGlyphs > previous.missingGlyphs || (
+      missingGlyphs > 0 && missingGlyphs === previous.missingGlyphs && chapterIds.length === previousIds.length
+    )) {
+      console.log('Kept the existing copy because the download did not improve coverage.');
       return;
     }
     library.manifest.books[index] = entry;
