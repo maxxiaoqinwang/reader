@@ -1,15 +1,19 @@
 class RequestError extends Error {}
 
-async function main() {
+const timeoutCodes = new Set([
+  'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+]);
+
+async function main(signal) {
   const [url, mediaType, maxBytes] = process.argv.slice(2);
   const limit = Number(maxBytes);
   const response = await fetch(url, {
     redirect: 'manual',
-    signal: AbortSignal.timeout(10_000),
+    signal,
   });
 
   if (response.status !== 200 || response.headers.get('cf-mitigated') === 'challenge') {
-    await response.body?.cancel();
+    response.body?.cancel().catch(() => {});
     const retry = response.headers.get('retry-after');
     const suffix = response.status === 429 && /^\d{1,6}$/.test(retry ?? '')
       ? ' (retry after ' + retry + ' seconds)'
@@ -17,7 +21,7 @@ async function main() {
     throw new RequestError('HTTP ' + response.status + suffix);
   }
   if (response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== mediaType) {
-    await response.body?.cancel();
+    response.body?.cancel().catch(() => {});
     throw new RequestError('unexpected content type');
   }
 
@@ -32,7 +36,14 @@ async function main() {
   process.stdout.write(Buffer.concat(chunks, length));
 }
 
-main().catch(error => {
-  console.error(error instanceof RequestError ? error.message : 'request failed');
+const signal = AbortSignal.timeout(10_000);
+main(signal).catch(error => {
+  if (error instanceof RequestError) {
+    console.error(error.message);
+  } else if (signal.reason?.name === 'TimeoutError' || timeoutCodes.has(error?.cause?.code ?? error?.code)) {
+    console.error('request timed out');
+  } else {
+    console.error('request failed');
+  }
   process.exitCode = 1;
 });

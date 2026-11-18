@@ -23,6 +23,7 @@ HTML_LIMIT = 2 * 1024 * 1024
 PNG_LIMIT = 256 * 1024
 TOTAL_LIMIT = 32 * 1024 * 1024
 REQUEST_GAP = 0.5
+RETRY_DELAY = 1
 FETCH_HELPER = Path(__file__).with_name("fetch-upstream.mjs")
 VOID_TAGS = frozenset(
     "area base br col embed hr img input link meta param source track wbr".split()
@@ -228,23 +229,31 @@ class Upstream:
             time.sleep(REQUEST_GAP)
         self.started = True
 
-        try:
-            response = subprocess.run(
-                ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit)],
-                capture_output=True, timeout=15, check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            raise SyncError(f"{label}: request failed") from None
+        for attempt in range(2):
+            try:
+                response = subprocess.run(
+                    ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit)],
+                    capture_output=True, timeout=15, check=False,
+                )
+            except subprocess.TimeoutExpired:
+                message = "request timed out"
+            except OSError:
+                raise SyncError(f"{label}: request failed") from None
+            else:
+                if response.returncode == 0:
+                    break
+                message = response.stderr.decode("ascii", errors="ignore").strip()
 
-        if response.returncode:
-            message = response.stderr.decode("ascii", errors="ignore").strip()
-            if not re.fullmatch(
-                r"HTTP \d{3}(?: \(retry after \d+ seconds\))?|"
-                r"(?:unexpected content type|oversized response|empty response|request failed)",
-                message,
-            ):
-                message = "request failed"
-            raise SyncError(f"{label}: {message}")
+            if message != "request timed out" or attempt == 1:
+                if not re.fullmatch(
+                    r"HTTP \d{3}(?: \(retry after \d+ seconds\))?|"
+                    r"(?:unexpected content type|oversized response|empty response|request failed|request timed out)",
+                    message,
+                ):
+                    message = "request failed"
+                raise SyncError(f"{label}: {message}")
+            print(f"{label}: request timed out, retrying once", flush=True)
+            time.sleep(RETRY_DELAY)
 
         body = response.stdout
         self.bytes_read += len(body)
