@@ -1,0 +1,61 @@
+name: Verify and deploy password reader
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_preview:
+        description: Deploy the encrypted sample to the locked preview page
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reader-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Probe access to the linked chapter
+        continue-on-error: true
+        run: node scripts/probe-upstream.mjs
+      - name: Build encrypted preview
+        env:
+          READER_PASSWORD: ${{ secrets.READER_PASSWORD }}
+        run: |
+          chapters="$(mktemp -d "$RUNNER_TEMP/reader-chapters.XXXXXX")"
+          printf '%s\n' '这是一段自写的测试正文，用于验证密码解锁。' > "$chapters/001-解锁验证.txt"
+          printf '%s\n' '能打开这一章，表示章节切换也已就绪。' > "$chapters/002-翻章验证.txt"
+          mkdir _site
+          node build_locked_reader.mjs "$chapters" _site/locked
+          cp index.html _site/index.html
+      - uses: actions/upload-pages-artifact@v4
+        if: inputs.deploy_preview
+        with:
+          path: _site
+
+  deploy:
+    if: inputs.deploy_preview
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
