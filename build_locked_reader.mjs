@@ -16,24 +16,37 @@ async function readChapters(inputDir) {
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const chapters = [];
   for (const name of files) {
-    const bytes = await readFile(join(inputDir, name));
     let body;
     try {
-      body = decoder.decode(bytes);
+      body = decoder.decode(await readFile(join(inputDir, name)));
     } catch {
-      throw new Error(`章节文件须使用 UTF-8 编码：${name}`);
+      throw new Error('无法读取 UTF-8 章节文件。');
     }
-    if (!body.trim()) throw new Error(`章节内容为空：${name}`);
+    if (!body.trim()) throw new Error('发现空白章节文件。');
     chapters.push({ title: name.slice(0, -4), body });
   }
   return chapters;
 }
 
-async function encryptChapters(chapters, password) {
+async function readBook(input) {
+  const entry = await lstat(input);
+  if (entry.isDirectory()) return JSON.stringify(await readChapters(input));
+
+  try {
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    const book = JSON.parse(decoder.decode(await readFile(input)));
+    if (!Array.isArray(book?.chapters) || !Array.isArray(book.images)) throw new Error();
+    return JSON.stringify(book);
+  } catch {
+    throw new Error('无法读取章节内容包。');
+  }
+}
+
+async function encryptBook(book, password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveReaderKey(password, salt, 'encrypt');
-  const plaintext = new TextEncoder().encode(JSON.stringify(chapters));
+  const plaintext = new TextEncoder().encode(book);
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
 
   return JSON.stringify({
@@ -70,16 +83,16 @@ async function writeSite(output, encryptedBook) {
 }
 
 async function main() {
-  const [inputDir, outputDir] = process.argv.slice(2);
-  if (!inputDir || !outputDir) {
-    throw new Error('用法：node build_locked_reader.mjs <UTF-8 TXT 章节目录> <新输出目录>');
+  const [input, outputDir] = process.argv.slice(2);
+  if (!input || !outputDir) {
+    throw new Error('用法：node build_locked_reader.mjs <UTF-8 TXT 章节目录或 JSON 内容包> <新输出目录>');
   }
   const password = process.env.READER_PASSWORD;
   if (!password || !password.trim()) throw new Error('请通过 READER_PASSWORD 提供阅读密码。');
 
-  const chapters = await readChapters(inputDir);
-  await writeSite(resolve(outputDir), await encryptChapters(chapters, password));
-  console.log(`已生成 ${chapters.length} 章的加密阅读页面。`);
+  const book = await readBook(input);
+  await writeSite(resolve(outputDir), await encryptBook(book, password));
+  console.log('已生成加密阅读页面。');
 }
 
 main().catch(error => {

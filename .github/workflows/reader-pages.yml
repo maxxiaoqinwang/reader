@@ -1,12 +1,14 @@
-name: Verify and deploy password reader
+name: Sync and deploy password reader
 
 on:
+  schedule:
+    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
-      deploy_preview:
-        description: Deploy the encrypted sample to the locked preview page
+      deploy:
+        description: Publish the verified reader to GitHub Pages
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -17,8 +19,9 @@ concurrency:
 
 jobs:
   build:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -26,26 +29,37 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - name: Probe access to the linked chapter
-        continue-on-error: true
-        run: node scripts/probe-upstream.mjs
-      - name: Build encrypted preview
+      - name: Sync chapters
+        run: |
+          source_dir="$(mktemp -d "$RUNNER_TEMP/reader-source.XXXXXX")"
+          source_file="$source_dir/book.json"
+          printf 'READER_SOURCE_FILE=%s\n' "$source_file" >> "$GITHUB_ENV"
+          python3 scripts/sync-chapters.py "$source_file"
+      - name: Build and verify encrypted reader
         env:
           READER_PASSWORD: ${{ secrets.READER_PASSWORD }}
         run: |
-          chapters="$(mktemp -d "$RUNNER_TEMP/reader-chapters.XXXXXX")"
-          printf '%s\n' '这是一段自写的测试正文，用于验证密码解锁。' > "$chapters/001-解锁验证.txt"
-          printf '%s\n' '能打开这一章，表示章节切换也已就绪。' > "$chapters/002-翻章验证.txt"
-          mkdir _site
-          node build_locked_reader.mjs "$chapters" _site/locked
-          cp index.html _site/index.html
+          node build_locked_reader.mjs "$READER_SOURCE_FILE" _site
+          node scripts/verify-encrypted-release.mjs "$READER_SOURCE_FILE" _site
+          mkdir _site/locked
+          cat > _site/locked/index.html <<'HTML'
+          <!doctype html>
+          <html lang="zh-CN">
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <meta http-equiv="refresh" content="0; url=../">
+          <title>我的在线阅读器</title>
+          <a href="../">进入阅读器</a>
+          </html>
+          HTML
+          sha256sum _site/book.json
       - uses: actions/upload-pages-artifact@v4
-        if: inputs.deploy_preview
+        if: github.event_name == 'schedule' || inputs.deploy
         with:
           path: _site
 
   deploy:
-    if: inputs.deploy_preview
+    if: github.event_name == 'schedule' || inputs.deploy
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5

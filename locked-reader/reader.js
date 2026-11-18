@@ -10,7 +10,9 @@ const chapterTitle = document.querySelector('#chapter-title');
 const chapterBody = document.querySelector('#chapter-body');
 const lockButton = document.querySelector('#lock');
 
-let chapters = [];
+const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
+const chapterImageUrls = new Map();
+let book = null;
 
 function decodeBase64(value) {
   if (typeof value !== 'string') {
@@ -19,17 +21,81 @@ function decodeBase64(value) {
   return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
+function parseBook(value) {
+  const chapters = Array.isArray(value)
+    ? value.map((chapter) => ({ title: chapter?.title, paragraphs: [[chapter?.body]] }))
+    : value?.chapters;
+  const images = Array.isArray(value) ? [] : value?.images;
+  if (!Array.isArray(chapters) || chapters.length === 0 || !Array.isArray(images)) {
+    throw new Error('Invalid book format');
+  }
+
+  const isPart = (part) => typeof part === 'string' ||
+    (Number.isInteger(part?.image) && part.image >= 0 && part.image < images.length);
+  for (const chapter of chapters) {
+    if (
+      typeof chapter?.title !== 'string' ||
+      !Array.isArray(chapter.paragraphs) ||
+      chapter.paragraphs.length === 0 ||
+      !chapter.paragraphs.every((paragraph) =>
+        Array.isArray(paragraph) && paragraph.length > 0 && paragraph.every(isPart))
+    ) {
+      throw new Error('Invalid chapter format');
+    }
+  }
+
+  const pngs = images.map((image) => {
+    const bytes = decodeBase64(image);
+    if (!pngSignature.every((byte, index) => bytes[index] === byte)) {
+      throw new Error('Invalid chapter image');
+    }
+    return new Blob([bytes], { type: 'image/png' });
+  });
+  return { chapters, images: pngs };
+}
+
+function clearChapter() {
+  chapterBody.replaceChildren();
+  for (const url of chapterImageUrls.values()) {
+    URL.revokeObjectURL(url);
+  }
+  chapterImageUrls.clear();
+}
+
+function inlineImage(index) {
+  if (!chapterImageUrls.has(index)) {
+    chapterImageUrls.set(index, URL.createObjectURL(book.images[index]));
+  }
+  const image = document.createElement('img');
+  image.alt = '';
+  image.src = chapterImageUrls.get(index);
+  return image;
+}
+
 function showChapter() {
-  const chapter = chapters[chapterSelect.selectedIndex];
+  const chapter = book?.chapters[chapterSelect.selectedIndex];
+  if (!chapter) {
+    return;
+  }
+  clearChapter();
   chapterTitle.textContent = chapter.title;
-  chapterBody.textContent = chapter.body;
+
+  const fragment = document.createDocumentFragment();
+  for (const parts of chapter.paragraphs) {
+    const paragraph = document.createElement('p');
+    for (const part of parts) {
+      paragraph.append(typeof part === 'string' ? part : inlineImage(part.image));
+    }
+    fragment.append(paragraph);
+  }
+  chapterBody.append(fragment);
 }
 
 function lockReader() {
-  chapters = [];
+  book = null;
   chapterSelect.replaceChildren();
   chapterTitle.textContent = '';
-  chapterBody.textContent = '';
+  clearChapter();
   readerContent.hidden = true;
   lockButton.hidden = true;
   unlockForm.reset();
@@ -81,17 +147,8 @@ unlockForm.addEventListener('submit', async (event) => {
       throw error;
     }
 
-    const book = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(cleartext));
-    if (
-      !Array.isArray(book) ||
-      book.length === 0 ||
-      !book.every((chapter) => typeof chapter?.title === 'string' && typeof chapter.body === 'string')
-    ) {
-      throw new Error('Invalid book format');
-    }
-
-    chapters = book;
-    for (const chapter of chapters) {
+    book = parseBook(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(cleartext)));
+    for (const chapter of book.chapters) {
       const option = document.createElement('option');
       option.textContent = chapter.title;
       chapterSelect.append(option);
@@ -103,6 +160,7 @@ unlockForm.addEventListener('submit', async (event) => {
     lockButton.hidden = false;
     chapterSelect.focus();
   } catch {
+    lockReader();
     unlockStatus.textContent = '暂时无法读取，请稍后重试。';
   } finally {
     passwordInput.disabled = false;

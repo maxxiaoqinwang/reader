@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'sha256-OfyG/u6VXsN76WoK7lMi9mHvlsTV3Zb2yKbTC1gKLIk='; form-action 'none'; base-uri 'none'">
+        content="default-src 'none'; script-src 'self'; connect-src 'self'; img-src blob:; style-src 'sha256-QoslMgu1tgB3vXcNAmzz0Sf7aWnPkfm+3pYnKpsD0Ow='; form-action 'none'; base-uri 'none'">
   <title>我的在线阅读器</title>
   <style>
     * {
@@ -104,6 +104,16 @@
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
+
+    #chapter-body p {
+      margin: 0 0 0.85em;
+    }
+
+    #chapter-body img {
+      height: 1em;
+      width: auto;
+      vertical-align: -0.12em;
+    }
   </style>
   <script type="module" src="./reader.js"></script>
 </head>
@@ -127,7 +137,7 @@
       <select id="chapter-select"></select>
       <article aria-labelledby="chapter-title">
         <h2 id="chapter-title"></h2>
-        <p id="chapter-body"></p>
+        <div id="chapter-body"></div>
       </article>
     </section>
   </main>
