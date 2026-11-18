@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; script-src 'self'; connect-src 'self' https://api.github.com; img-src blob:; style-src 'sha256-6+4WpCq4zCLyj5JE/T9ovLq/EOlSP3dqGPhzM/dn8sI='; form-action 'none'; base-uri 'none'">
+        content="default-src 'none'; script-src 'self'; connect-src 'self' https://api.github.com; img-src blob:; style-src 'sha256-sAYsg10KChUfYUMrAEs8vX4/S3TXAUeMfE8xrr1Mruw='; form-action 'none'; base-uri 'none'">
   <meta name="reader-sync-endpoint" content="">
   <title>我的在线阅读器</title>
   <style>
@@ -196,7 +196,7 @@
       mix-blend-mode: screen;
     }
 
-    #chapter-menu {
+    #chapter-menu, #chapter-corner {
       display: none;
     }
 
@@ -234,6 +234,12 @@
         gap: 0.45rem;
       }
 
+      #chapter-navigation[data-corner="left"] {
+        right: auto;
+        left: max(0.875rem, env(safe-area-inset-left));
+        align-items: flex-start;
+      }
+
       #chapter-menu {
         display: block;
         padding-inline: 0.9rem;
@@ -246,6 +252,8 @@
       }
 
       #chapter-actions {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
         gap: 0.35rem;
         padding: 0.35rem;
         border: 1px solid var(--line);
@@ -253,9 +261,15 @@
         background: var(--surface);
         box-shadow: var(--menu-shadow);
       }
+
+      #chapter-corner {
+        display: block;
+        grid-column: 1 / -1;
+        font-size: 0.875rem;
+      }
     }
   </style>
-  <script type="module" src="./reader.js?v=f8baf7f5f013"></script>
+  <script type="module" src="./reader.js?v=c826ae5ec506"></script>
 </head>
 <body>
   <header>
@@ -310,11 +324,12 @@
           <h2 id="chapter-title" tabindex="-1"></h2>
           <div id="chapter-body"></div>
         </article>
-        <nav id="chapter-navigation" aria-label="章节导航">
+        <nav id="chapter-navigation" aria-label="章节导航" data-corner="right">
           <button id="chapter-menu" type="button" aria-expanded="false" aria-controls="chapter-actions">翻章</button>
           <div id="chapter-actions">
             <button id="chapter-prev" type="button" disabled>上一章</button>
             <button id="chapter-next" type="button" disabled>下一章</button>
+            <button id="chapter-corner" type="button">移到左下角</button>
           </div>
         </nav>
       </div>

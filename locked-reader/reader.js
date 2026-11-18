@@ -16,6 +16,7 @@ const chapterTitle = document.querySelector('#chapter-title');
 const chapterBody = document.querySelector('#chapter-body');
 const chapterNavigation = document.querySelector('#chapter-navigation');
 const chapterMenu = document.querySelector('#chapter-menu');
+const chapterCorner = document.querySelector('#chapter-corner');
 const previousChapter = document.querySelector('#chapter-prev');
 const nextChapter = document.querySelector('#chapter-next');
 const lockButton = document.querySelector('#lock');
@@ -35,7 +36,8 @@ const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
 const chapterImageUrls = new Map();
 const colorPreference = matchMedia('(prefers-color-scheme: dark)');
 const themeKey = 'reader-color-theme';
-let chosenTheme = readTheme();
+const chapterCornerKey = 'reader-chapter-corner';
+let chosenTheme = readPreference(themeKey, ['light', 'dark']);
 let book = null;
 let passphrase = null;
 let loadRequest = null;
@@ -47,22 +49,32 @@ if (syncEndpoint) {
   githubTokenInput.required = false;
 }
 
-function readTheme() {
+function readPreference(key, choices) {
   try {
-    const stored = localStorage.getItem(themeKey);
-    if (stored === 'light' || stored === 'dark') {
-      return stored;
-    }
+    const stored = localStorage.getItem(key);
+    return choices.includes(stored) ? stored : null;
   } catch {
-    // System appearance still works when storage is unavailable.
+    return null;
   }
-  return null;
+}
+
+function savePreference(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The choice stays active on this page when storage is unavailable.
+  }
 }
 
 function applyTheme() {
   const theme = chosenTheme ?? (colorPreference.matches ? 'dark' : 'light');
   document.documentElement.dataset.theme = theme;
   themeButton.textContent = theme === 'dark' ? '切换浅色' : '切换深色';
+}
+
+function applyChapterCorner(side) {
+  chapterNavigation.dataset.corner = side;
+  chapterCorner.textContent = side === 'left' ? '移到右下角' : '移到左下角';
 }
 
 function readSyncEndpoint() {
@@ -471,6 +483,11 @@ chapterMenu.addEventListener('click', () => {
   const open = chapterMenu.getAttribute('aria-expanded') === 'true';
   chapterMenu.setAttribute('aria-expanded', String(!open));
 });
+chapterCorner.addEventListener('click', () => {
+  const side = chapterNavigation.dataset.corner === 'left' ? 'right' : 'left';
+  applyChapterCorner(side);
+  savePreference(chapterCornerKey, side);
+});
 chapterNavigation.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && chapterMenu.getAttribute('aria-expanded') === 'true') {
     chapterMenu.setAttribute('aria-expanded', 'false');
@@ -483,11 +500,7 @@ lockButton.addEventListener('click', lockReader);
 
 themeButton.addEventListener('click', () => {
   chosenTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  try {
-    localStorage.setItem(themeKey, chosenTheme);
-  } catch {
-    // The choice remains active for this page when storage is unavailable.
-  }
+  savePreference(themeKey, chosenTheme);
   applyTheme();
 });
 if (colorPreference.addEventListener) {
@@ -496,3 +509,4 @@ if (colorPreference.addEventListener) {
   colorPreference.addListener(applyTheme);
 }
 applyTheme();
+applyChapterCorner(readPreference(chapterCornerKey, ['left', 'right']) ?? 'right');
