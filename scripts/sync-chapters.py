@@ -2,14 +2,13 @@ import argparse
 import base64
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import time
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.parse import urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, build_opener
 
 ORIGIN = "https://www.lizhiks.com"
 HOST = "www.lizhiks.com"
@@ -22,7 +21,7 @@ HTML_LIMIT = 2 * 1024 * 1024
 PNG_LIMIT = 256 * 1024
 TOTAL_LIMIT = 32 * 1024 * 1024
 REQUEST_GAP = 0.5
-REQUEST_TIMEOUT = 10
+FETCH_HELPER = Path(__file__).with_name("fetch-upstream.mjs")
 VOID_TAGS = frozenset(
     "area base br col embed hr img input link meta param source track wbr".split()
 )
@@ -163,14 +162,8 @@ def parse_chapter(html):
     return title, parser.paragraphs
 
 
-class NoRedirects(HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, message, headers, new_url):
-        return None
-
-
 class Upstream:
     def __init__(self):
-        self.opener = build_opener(NoRedirects())
         self.started = False
         self.bytes_read = 0
 
@@ -180,20 +173,24 @@ class Upstream:
         self.started = True
 
         try:
-            with self.opener.open(url, timeout=REQUEST_TIMEOUT) as response:
-                if response.status != 200:
-                    raise SyncError(f"{label}: HTTP {response.status}")
-                if response.headers.get("cf-mitigated", "").lower() == "challenge":
-                    raise SyncError(f"{label}: challenge")
-                if response.headers.get_content_type() != media_type:
-                    raise SyncError(f"{label}: unexpected content type")
-                body = response.read(limit + 1)
-        except HTTPError as error:
-            error.close()
-            raise SyncError(f"{label}: HTTP {error.code}") from None
-        except OSError:
+            response = subprocess.run(
+                ["node", "--use-system-ca", str(FETCH_HELPER), url, media_type, str(limit)],
+                capture_output=True, timeout=15, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
             raise SyncError(f"{label}: request failed") from None
 
+        if response.returncode:
+            message = response.stderr.decode("ascii", errors="ignore").strip()
+            if not re.fullmatch(
+                r"HTTP \d{3}(?: \(retry after \d+ seconds\))?|"
+                r"(?:unexpected content type|oversized response|empty response|request failed)",
+                message,
+            ):
+                message = "request failed"
+            raise SyncError(f"{label}: {message}")
+
+        body = response.stdout
         self.bytes_read += len(body)
         if not body or len(body) > limit or self.bytes_read > TOTAL_LIMIT:
             raise SyncError(f"{label}: empty or oversized response")
