@@ -1,8 +1,6 @@
 name: Sync and deploy password reader
 
 on:
-  schedule:
-    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
       deploy:
@@ -54,12 +52,12 @@ jobs:
           HTML
           sha256sum _site/book.json
       - uses: actions/upload-pages-artifact@v4
-        if: github.event_name == 'schedule' || inputs.deploy
+        if: inputs.deploy
         with:
           path: _site
 
   deploy:
-    if: github.event_name == 'schedule' || inputs.deploy
+    if: inputs.deploy
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
