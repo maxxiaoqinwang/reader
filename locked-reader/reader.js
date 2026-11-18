@@ -1,5 +1,6 @@
 import { deriveReaderKey } from './crypto.js';
 
+const themeButton = document.querySelector('#theme-toggle');
 const unlockForm = document.querySelector('#unlock-form');
 const passwordInput = document.querySelector('#reader-password');
 const unlockButton = document.querySelector('#unlock');
@@ -13,6 +14,10 @@ const chapterControls = document.querySelector('#chapter-controls');
 const chapterSelect = document.querySelector('#chapter-select');
 const chapterTitle = document.querySelector('#chapter-title');
 const chapterBody = document.querySelector('#chapter-body');
+const chapterNavigation = document.querySelector('#chapter-navigation');
+const chapterMenu = document.querySelector('#chapter-menu');
+const previousChapter = document.querySelector('#chapter-prev');
+const nextChapter = document.querySelector('#chapter-next');
 const lockButton = document.querySelector('#lock');
 const syncTools = document.querySelector('#sync-tools');
 const syncForm = document.querySelector('#sync-form');
@@ -28,6 +33,9 @@ const dispatchUrl = 'https://api.github.com/repos/maxxiaoqinwang/reader/actions/
 const syncEndpoint = readSyncEndpoint();
 const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
 const chapterImageUrls = new Map();
+const colorPreference = matchMedia('(prefers-color-scheme: dark)');
+const themeKey = 'reader-color-theme';
+let chosenTheme = readTheme();
 let book = null;
 let passphrase = null;
 let loadRequest = null;
@@ -37,6 +45,24 @@ if (syncEndpoint) {
   githubTokenFields.hidden = true;
   githubTokenInput.disabled = true;
   githubTokenInput.required = false;
+}
+
+function readTheme() {
+  try {
+    const stored = localStorage.getItem(themeKey);
+    if (stored === 'light' || stored === 'dark') {
+      return stored;
+    }
+  } catch {
+    // System appearance still works when storage is unavailable.
+  }
+  return null;
+}
+
+function applyTheme() {
+  const theme = chosenTheme ?? (colorPreference.matches ? 'dark' : 'light');
+  document.documentElement.dataset.theme = theme;
+  themeButton.textContent = theme === 'dark' ? '切换浅色' : '切换深色';
 }
 
 function readSyncEndpoint() {
@@ -159,7 +185,8 @@ function inlineImage(index) {
 }
 
 function showChapter() {
-  const chapter = book?.chapters[chapterSelect.selectedIndex];
+  const index = chapterSelect.selectedIndex;
+  const chapter = book?.chapters[index];
   if (!chapter) {
     return;
   }
@@ -175,6 +202,20 @@ function showChapter() {
     fragment.append(paragraph);
   }
   chapterBody.append(fragment);
+  previousChapter.disabled = index === 0;
+  nextChapter.disabled = index === book.chapters.length - 1;
+  chapterMenu.setAttribute('aria-expanded', 'false');
+}
+
+function turnChapter(direction) {
+  const index = chapterSelect.selectedIndex + direction;
+  if (!book?.chapters[index]) {
+    return;
+  }
+  chapterSelect.selectedIndex = index;
+  showChapter();
+  chapterTitle.focus({ preventScroll: true });
+  chapterTitle.scrollIntoView({ block: 'start' });
 }
 
 function clearBook() {
@@ -182,6 +223,7 @@ function clearBook() {
   chapterSelect.replaceChildren();
   chapterTitle.textContent = '';
   clearChapter();
+  chapterMenu.setAttribute('aria-expanded', 'false');
   chapterControls.hidden = true;
 }
 
@@ -425,4 +467,32 @@ syncForm.addEventListener('submit', async (event) => {
 bookSelect.addEventListener('change', loadSelectedBook);
 refreshButton.addEventListener('click', refreshLibrary);
 chapterSelect.addEventListener('change', showChapter);
+chapterMenu.addEventListener('click', () => {
+  const open = chapterMenu.getAttribute('aria-expanded') === 'true';
+  chapterMenu.setAttribute('aria-expanded', String(!open));
+});
+chapterNavigation.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && chapterMenu.getAttribute('aria-expanded') === 'true') {
+    chapterMenu.setAttribute('aria-expanded', 'false');
+    chapterMenu.focus();
+  }
+});
+previousChapter.addEventListener('click', () => turnChapter(-1));
+nextChapter.addEventListener('click', () => turnChapter(1));
 lockButton.addEventListener('click', lockReader);
+
+themeButton.addEventListener('click', () => {
+  chosenTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try {
+    localStorage.setItem(themeKey, chosenTheme);
+  } catch {
+    // The choice remains active for this page when storage is unavailable.
+  }
+  applyTheme();
+});
+if (colorPreference.addEventListener) {
+  colorPreference.addEventListener('change', applyTheme);
+} else {
+  colorPreference.addListener(applyTheme);
+}
+applyTheme();

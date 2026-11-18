@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; script-src 'self'; connect-src 'self' https://api.github.com; img-src blob:; style-src 'sha256-d4AFLDvSALVsFv/mRIEXG9mG+0o+S5DlH/kkS3J8rE0='; form-action 'none'; base-uri 'none'">
+        content="default-src 'none'; script-src 'self'; connect-src 'self' https://api.github.com; img-src blob:; style-src 'sha256-6+4WpCq4zCLyj5JE/T9ovLq/EOlSP3dqGPhzM/dn8sI='; form-action 'none'; base-uri 'none'">
   <meta name="reader-sync-endpoint" content="">
   <title>我的在线阅读器</title>
   <style>
@@ -12,15 +12,43 @@
       box-sizing: border-box;
     }
 
+    :root {
+      color-scheme: light;
+      --page: #faf9f4;
+      --ink: #212823;
+      --line: #deded5;
+      --surface: #fff;
+      --control-border: #818980;
+      --accent: #284e3e;
+      --on-accent: #fff;
+      --link: #1c5c81;
+      --focus: #2c7296;
+      --menu-shadow: 0 3px 16px #17251d26;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #151b17;
+      --ink: #eeeae0;
+      --line: #384239;
+      --surface: #222b24;
+      --control-border: #77877b;
+      --accent: #b2d4b9;
+      --on-accent: #172a20;
+      --link: #a8d8ee;
+      --focus: #a8d8ee;
+      --menu-shadow: 0 3px 16px #0006;
+    }
+
     body {
       margin: 0;
-      color: #212823;
-      background: #faf9f4;
+      color: var(--ink);
+      background: var(--page);
       font-family: system-ui, sans-serif;
     }
 
     header {
-      border-bottom: 1px solid #deded5;
+      border-bottom: 1px solid var(--line);
     }
 
     .container {
@@ -35,6 +63,12 @@
       justify-content: space-between;
       gap: 1rem;
       padding-block: 0.625rem;
+    }
+
+    .header-actions {
+      display: flex;
+      flex-shrink: 0;
+      gap: 0.375rem;
     }
 
     h1 {
@@ -61,10 +95,10 @@
       min-height: 44px;
       max-width: 100%;
       padding: 0.5rem 0.75rem;
-      border: 1px solid #818980;
+      border: 1px solid var(--control-border);
       border-radius: 0.35rem;
       color: inherit;
-      background: #fff;
+      background: var(--surface);
       font: inherit;
     }
 
@@ -76,11 +110,23 @@
       cursor: pointer;
     }
 
+    a {
+      color: var(--link);
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    #unlock, #chapter-menu {
+      border-color: var(--accent);
+      color: var(--on-accent);
+      background: var(--accent);
+    }
+
     #unlock {
       margin-top: 0.75rem;
-      border-color: #284e3e;
-      color: #fff;
-      background: #284e3e;
     }
 
     button:disabled {
@@ -124,6 +170,7 @@
       margin: 1.75rem 0 1rem;
       font-size: 1.4rem;
       overflow-wrap: anywhere;
+      scroll-margin-block-start: 1rem;
     }
 
     #chapter-body {
@@ -143,14 +190,81 @@
       width: auto;
       vertical-align: -0.12em;
     }
+
+    [data-theme="dark"] #chapter-body img {
+      filter: invert(1);
+      mix-blend-mode: screen;
+    }
+
+    #chapter-menu {
+      display: none;
+    }
+
+    #chapter-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    #chapter-actions button:disabled {
+      cursor: default;
+    }
+
+    @media (max-width: 48rem), (max-width: 60rem) and (pointer: coarse) {
+      header .container {
+        gap: 0.5rem;
+      }
+
+      .header-actions button {
+        padding-inline: 0.5rem;
+        font-size: 0.875rem;
+      }
+
+      #chapter-controls {
+        padding-bottom: 3.5rem;
+      }
+
+      #chapter-navigation {
+        position: fixed;
+        z-index: 1;
+        right: max(0.875rem, env(safe-area-inset-right));
+        bottom: max(0.875rem, env(safe-area-inset-bottom));
+        display: flex;
+        flex-direction: column-reverse;
+        align-items: flex-end;
+        gap: 0.45rem;
+      }
+
+      #chapter-menu {
+        display: block;
+        padding-inline: 0.9rem;
+        border-radius: 2rem;
+        box-shadow: var(--menu-shadow);
+      }
+
+      #chapter-menu[aria-expanded="false"] + #chapter-actions {
+        display: none;
+      }
+
+      #chapter-actions {
+        gap: 0.35rem;
+        padding: 0.35rem;
+        border: 1px solid var(--line);
+        border-radius: 0.6rem;
+        background: var(--surface);
+        box-shadow: var(--menu-shadow);
+      }
+    }
   </style>
-  <script type="module" src="./reader.js"></script>
+  <script type="module" src="./reader.js?v=f8baf7f5f013"></script>
 </head>
 <body>
   <header>
     <div class="container">
       <h1>我的在线阅读器</h1>
-      <button id="lock" type="button" hidden>锁定</button>
+      <div class="header-actions">
+        <button id="theme-toggle" type="button">切换深色</button>
+        <button id="lock" type="button" hidden>锁定</button>
+      </div>
     </div>
   </header>
   <main class="container">
@@ -193,9 +307,16 @@
         <label for="chapter-select">章节</label>
         <select id="chapter-select"></select>
         <article aria-labelledby="chapter-title">
-          <h2 id="chapter-title"></h2>
+          <h2 id="chapter-title" tabindex="-1"></h2>
           <div id="chapter-body"></div>
         </article>
+        <nav id="chapter-navigation" aria-label="章节导航">
+          <button id="chapter-menu" type="button" aria-expanded="false" aria-controls="chapter-actions">翻章</button>
+          <div id="chapter-actions">
+            <button id="chapter-prev" type="button" disabled>上一章</button>
+            <button id="chapter-next" type="button" disabled>下一章</button>
+          </div>
+        </nav>
       </div>
     </section>
   </main>
