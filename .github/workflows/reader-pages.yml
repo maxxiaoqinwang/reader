@@ -46,6 +46,7 @@ jobs:
       - name: Build and verify encrypted library
         env:
           READER_PASSWORD: ${{ secrets.READER_PASSWORD }}
+          READER_SYNC_ENDPOINT: ${{ vars.READER_SYNC_ENDPOINT }}
           READER_SOURCE_FILE: ${{ steps.sync.outputs.source_file }}
         run: |
           arguments=(library _site)

@@ -17,6 +17,7 @@ const lockButton = document.querySelector('#lock');
 const syncTools = document.querySelector('#sync-tools');
 const syncForm = document.querySelector('#sync-form');
 const bookUrlInput = document.querySelector('#book-url');
+const githubTokenFields = document.querySelector('#github-token-fields');
 const githubTokenInput = document.querySelector('#github-token');
 const syncButton = document.querySelector('#sync-submit');
 const syncStatus = document.querySelector('#sync-status');
@@ -24,12 +25,38 @@ const syncStatus = document.querySelector('#sync-status');
 const positiveId = /^[1-9]\d*$/;
 const sourceBookUrl = /^https:\/\/(?:www\.)?lizhiks\.com\/book\/([1-9]\d*)\.html$/;
 const dispatchUrl = 'https://api.github.com/repos/maxxiaoqinwang/reader/actions/workflows/reader-pages.yml/dispatches';
+const syncEndpoint = readSyncEndpoint();
 const pngSignature = [137, 80, 78, 71, 13, 10, 26, 10];
 const chapterImageUrls = new Map();
 let book = null;
 let passphrase = null;
 let loadRequest = null;
 let syncRequest = null;
+
+if (syncEndpoint) {
+  githubTokenFields.hidden = true;
+  githubTokenInput.disabled = true;
+  githubTokenInput.required = false;
+}
+
+function readSyncEndpoint() {
+  const value = document.querySelector('meta[name="reader-sync-endpoint"]')?.content.trim();
+  if (!value) {
+    return null;
+  }
+  try {
+    const endpoint = new URL(value);
+    if (
+      endpoint.protocol === 'https:' && endpoint.pathname === '/sync' &&
+      !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash
+    ) {
+      return endpoint.href;
+    }
+  } catch {
+    // A missing or invalid endpoint leaves the existing GitHub token flow available.
+  }
+  return null;
+}
 
 function decodeBase64(value) {
   if (typeof value !== 'string') {
@@ -322,29 +349,32 @@ syncForm.addEventListener('submit', async (event) => {
     syncStatus.textContent = '请输入荔枝小说的 HTTPS 书籍页链接。';
     return;
   }
-  const token = githubTokenInput.value.trim();
-  if (!/^github_pat_[A-Za-z0-9_]+$/.test(token)) {
-    syncStatus.textContent = '请输入以 github_pat_ 开头的细粒度令牌。';
-    return;
+  const bookUrl = 'https://www.lizhiks.com/book/' + match[1] + '.html';
+  const headers = { 'Content-Type': 'application/json' };
+  let body;
+  if (syncEndpoint) {
+    body = { password: passphrase, book_url: bookUrl };
+  } else {
+    const token = githubTokenInput.value.trim();
+    if (!/^github_pat_[A-Za-z0-9_]+$/.test(token)) {
+      syncStatus.textContent = '请输入以 github_pat_ 开头的细粒度令牌。';
+      return;
+    }
+    githubTokenInput.value = '';
+    headers.Accept = 'application/vnd.github+json';
+    headers.Authorization = 'Bearer ' + token;
+    headers['X-GitHub-Api-Version'] = '2026-03-10';
+    body = { ref: 'main', inputs: { book_url: bookUrl, deploy: true } };
   }
-  githubTokenInput.value = '';
   const request = new AbortController();
   syncRequest = request;
   syncButton.disabled = true;
   syncStatus.textContent = '正在提交同步请求…';
   try {
-    const result = await fetch(dispatchUrl, {
+    const result = await fetch(syncEndpoint ?? dispatchUrl, {
       method: 'POST',
-      headers: {
-        'Accept': 'application/vnd.github+json',
-        'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json',
-        'X-GitHub-Api-Version': '2026-03-10',
-      },
-      body: JSON.stringify({
-        ref: 'main',
-        inputs: { book_url: 'https://www.lizhiks.com/book/' + match[1] + '.html', deploy: true },
-      }),
+      headers,
+      body: JSON.stringify(body),
       credentials: 'omit',
       redirect: 'error',
       referrerPolicy: 'no-referrer',
@@ -354,7 +384,15 @@ syncForm.addEventListener('submit', async (event) => {
       return;
     }
     if (!result.ok) {
-      syncStatus.textContent = 'GitHub 未接受同步请求（HTTP ' + result.status + '），请检查令牌权限。';
+      if (!syncEndpoint) {
+        syncStatus.textContent = 'GitHub 未接受同步请求（HTTP ' + result.status + '），请检查令牌权限。';
+      } else if (result.status === 401) {
+        syncStatus.textContent = '同步服务未接受当前阅读口令。';
+      } else if (result.status === 429) {
+        syncStatus.textContent = '同步请求过多，请稍后再试。';
+      } else {
+        syncStatus.textContent = '同步服务未接受请求（HTTP ' + result.status + '）。';
+      }
       return;
     }
     const data = await result.json().catch(() => null);
@@ -372,7 +410,9 @@ syncForm.addEventListener('submit', async (event) => {
     }
   } catch {
     if (syncRequest === request) {
-      syncStatus.textContent = '暂时无法连接 GitHub，请稍后再试。';
+      syncStatus.textContent = syncEndpoint
+        ? '暂时无法连接同步服务，请稍后再试。'
+        : '暂时无法连接 GitHub，请稍后再试。';
     }
   } finally {
     if (syncRequest === request) {

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; script-src 'self'; connect-src 'self' https://api.github.com; img-src blob:; style-src 'sha256-d4AFLDvSALVsFv/mRIEXG9mG+0o+S5DlH/kkS3J8rE0='; form-action 'none'; base-uri 'none'">
+  <meta name="reader-sync-endpoint" content="">
   <title>我的在线阅读器</title>
   <style>
     * {
@@ -174,13 +175,15 @@
             <label for="book-url">荔枝小说链接</label>
             <input id="book-url" type="url" placeholder="https://www.lizhiks.com/book/229314.html"
                    autocomplete="off" autocapitalize="none" spellcheck="false" required>
-            <label for="github-token">GitHub 访问令牌</label>
-            <p id="token-help">
-              <a href="https://github.com/settings/personal-access-tokens/new?name=Reader%20Sync&amp;target_name=maxxiaoqinwang&amp;actions=write"
-                 target="_blank" rel="noopener noreferrer">创建细粒度令牌</a>，仅选择 reader 仓库并授予 Actions 写入权限。
-            </p>
-            <input id="github-token" type="password" autocomplete="off" autocapitalize="none"
-                   spellcheck="false" aria-describedby="token-help" required>
+            <div id="github-token-fields">
+              <label for="github-token">GitHub 访问令牌</label>
+              <p id="token-help">
+                <a href="https://github.com/settings/personal-access-tokens/new?name=Reader%20Sync&amp;target_name=maxxiaoqinwang&amp;actions=write"
+                   target="_blank" rel="noopener noreferrer">创建细粒度令牌</a>，仅选择 reader 仓库并授予 Actions 写入权限。
+              </p>
+              <input id="github-token" type="password" autocomplete="off" autocapitalize="none"
+                     spellcheck="false" aria-describedby="token-help" required>
+            </div>
             <button id="sync-submit" type="submit">启动同步</button>
           </form>
           <p id="sync-status" role="status"></p>

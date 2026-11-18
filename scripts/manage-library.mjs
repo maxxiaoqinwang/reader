@@ -8,7 +8,7 @@ const seed = {
   chapterIds: Array.from({ length: 15 }, (_, index) => index + 1),
 };
 const manifestName = 'index.json';
-const readerFiles = ['index.html', 'reader.js', 'crypto.js'];
+const readerScripts = ['reader.js', 'crypto.js'];
 
 class LibraryError extends Error {}
 
@@ -88,11 +88,43 @@ async function addBook(library, sourcePath, password) {
   }
 }
 
-async function writeRelease(site, volumes, encryptedIndex) {
+function syncEndpoint(value) {
+  if (!value?.trim()) return null;
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new LibraryError('Invalid reader sync endpoint.');
+  }
+  if (
+    url.protocol !== 'https:' || url.port || url.username || url.password || url.search || url.hash ||
+    url.pathname !== '/sync' || !/^[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(url.hostname)
+  ) {
+    throw new LibraryError('Expected a Cloudflare Workers HTTPS sync endpoint.');
+  }
+  return url;
+}
+
+async function readerHtml(endpoint) {
+  const html = await readFile(new URL('../locked-reader/index.html', import.meta.url), 'utf-8');
+  if (!endpoint) return html;
+
+  const marker = '<meta name="reader-sync-endpoint" content="">';
+  const connectionPolicy = "connect-src 'self' https://api.github.com";
+  if (!html.includes(marker) || !html.includes(connectionPolicy)) {
+    throw new LibraryError('Missing sync configuration in the reader template.');
+  }
+  return html
+    .replace(marker, '<meta name="reader-sync-endpoint" content="' + endpoint.href + '">')
+    .replace(connectionPolicy, "connect-src 'self' " + endpoint.origin);
+}
+
+async function writeRelease(site, volumes, encryptedIndex, html) {
   const books = join(site, 'library');
   await mkdir(site);
   await mkdir(books);
-  for (const file of readerFiles) {
+  await writeFile(join(site, 'index.html'), html, 'utf-8');
+  for (const file of readerScripts) {
     await copyFile(new URL('../locked-reader/' + file, import.meta.url), join(site, file));
   }
   for (const [id, volume] of volumes) {
@@ -119,13 +151,14 @@ async function main() {
   const password = process.env.READER_PASSWORD;
   if (!folder || !site || !password?.trim()) throw new LibraryError('Missing library input or password.');
 
+  const html = await readerHtml(syncEndpoint(process.env.READER_SYNC_ENDPOINT));
   const library = await readLibrary(folder, password);
   if (sourcePath) await addBook(library, sourcePath, password);
   const index = JSON.stringify(library.manifest);
   const encryptedIndex = index === library.originalIndex
     ? library.encryptedIndex
     : await sealVerified(index, password);
-  await writeRelease(site, library.volumes, encryptedIndex);
+  await writeRelease(site, library.volumes, encryptedIndex, html);
 
   for (const [id, book] of library.volumes) {
     await writeFile(join(folder, id + '.json'), book.encrypted, 'utf-8');
