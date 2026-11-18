@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'sha256-OfyG/u6VXsN76WoK7lMi9mHvlsTV3Zb2yKbTC1gKLIk='; form-action 'none'; base-uri 'none'">
+  <title>我的在线阅读器</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: #212823;
+      background: #faf9f4;
+      font-family: system-ui, sans-serif;
+    }
+
+    header {
+      border-bottom: 1px solid #deded5;
+    }
+
+    .container {
+      width: min(100%, 46rem);
+      margin: auto;
+      padding-inline: 1rem;
+    }
+
+    header .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding-block: 0.625rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.125rem;
+    }
+
+    main {
+      padding-block: 2rem;
+    }
+
+    form {
+      max-width: 24rem;
+      margin: 2rem auto;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 0.4rem;
+      font-weight: 600;
+    }
+
+    input, select, button {
+      min-height: 44px;
+      max-width: 100%;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid #818980;
+      border-radius: 0.35rem;
+      color: inherit;
+      background: #fff;
+      font: inherit;
+    }
+
+    input, select {
+      width: 100%;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    #unlock {
+      margin-top: 0.75rem;
+      border-color: #284e3e;
+      color: #fff;
+      background: #284e3e;
+    }
+
+    button:disabled {
+      opacity: 0.65;
+      cursor: wait;
+    }
+
+    #unlock-status {
+      margin: 0.75rem 0 0;
+    }
+
+    #chapter-title {
+      margin: 1.75rem 0 1rem;
+      font-size: 1.4rem;
+      overflow-wrap: anywhere;
+    }
+
+    #chapter-body {
+      margin: 0 0 2rem;
+      font-size: 1.0625rem;
+      line-height: 1.9;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  </style>
+  <script type="module" src="./reader.js"></script>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>我的在线阅读器</h1>
+      <button id="lock" type="button" hidden>锁定</button>
+    </div>
+  </header>
+  <main class="container">
+    <form id="unlock-form">
+      <label for="reader-password">阅读口令</label>
+      <input id="reader-password" type="password" autocomplete="off"
+             autocapitalize="none" spellcheck="false" aria-describedby="unlock-status" required>
+      <button id="unlock" type="submit">解锁</button>
+      <p id="unlock-status" role="status"></p>
+    </form>
+    <section id="reader-content" hidden>
+      <label for="chapter-select">章节</label>
+      <select id="chapter-select"></select>
+      <article aria-labelledby="chapter-title">
+        <h2 id="chapter-title"></h2>
+        <p id="chapter-body"></p>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
